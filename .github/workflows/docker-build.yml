@@ -26,7 +26,7 @@ jobs:
           password: ${{ secrets.GHCR_PAT }}
       - name: Build image
         run: |
-          IMAGE_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_NAME=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           docker build -f Dockerfile -t "${IMAGE_NAME}:${{ github.sha }}" .
       - name: Push image to GHCR
         run: |
@@ -47,36 +47,25 @@ jobs:
             echo "Deploying image: $FULL"
 
             # prepare deploy dir
-            DEPLOY_DIR="~/fast-deploy"
+            DEPLOY_DIR="$HOME/fast-deploy"
             mkdir -p "$DEPLOY_DIR"
             cd "$DEPLOY_DIR"
 
             # try download the repo's compose file (use token if private)
-            COMPOSE_URL="https://raw.githubusercontent.com/${{ github.repository }}/main/docker-compose-backend.yaml"
+            COMPOSE_API_URL="https://api.github.com/repos/${{ github.repository }}/contents/docker-compose-backend.yaml?ref=main"
             if [ -n "${{ secrets.GHCR_PAT }}" ]; then
-              curl -fsSL -H "Authorization: token ${{ secrets.GHCR_PAT }}" "$COMPOSE_URL" -o docker-compose-backend.yaml || true
+              curl -fsSL -H "Authorization: token ${{ secrets.GHCR_PAT }}" -H "Accept: application/vnd.github.v3.raw" "$COMPOSE_API_URL" -o docker-compose-backend.yaml || true
             else
-              curl -fsSL "$COMPOSE_URL" -o docker-compose-backend.yaml || true
+              curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/docker-compose-backend.yaml" -o docker-compose-backend.yaml || true
             fi
 
             # if not present, create a minimal compose file
             if [ ! -s docker-compose-backend.yaml ]; then
-              cat > docker-compose-backend.yaml <<'YAML'
-version: '3.8'
-services:
-  backend:
-    image: PLACEHOLDER_IMAGE
-    ports:
-      - "8000:8000"
-YAML
+              printf "%s\n" "version: '3.8'" "services:" "  backend:" "    image: PLACEHOLDER_IMAGE" "    ports:" "      - \"8000:8000\"" > docker-compose-backend.yaml
             fi
 
             # write override to point to the built image
-            cat > docker-compose.override.yml <<EOF
-services:
-  backend:
-    image: ${FULL}
-EOF
+            printf "%s\n" "services:" "  backend:" "    image: ${FULL}" > docker-compose.override.yml
 
             # login to GHCR and pull then run via compose
             echo "Logging in to ghcr.io"
