@@ -1,12 +1,16 @@
 services:
   db:
     image: postgres:17
-    container_name: postgres_db
+    container_name: "${GIT_OWNER}_postgres_db"
+
+    env_file:
+      - .env
 
     environment:
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: 1234
       POSTGRES_DB: my_db
+      GIT_OWNER: ${GIT_OWNER}
 
     ports:
       - "5432:5432"

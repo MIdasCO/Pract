@@ -9,19 +9,78 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
-      - name: Login to DockerHub
-        if: false
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v2
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_USER }}
+          password: ${{ secrets.GHCR_PAT }}
       - name: Build image
         run: |
           IMAGE_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           docker build -f Dockerfile -t "${IMAGE_NAME}:${{ github.sha }}" .
+      - name: Push image to GHCR
+        run: |
+          IMAGE_NAME=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          docker push "${IMAGE_NAME}:${{ github.sha }}"
+      - name: Deploy to server via SSH
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_SSH_PORT }}
+          script: |
+            set -eux
+            IMAGE="ghcr.io/${{ github.repository }}"
+            IMAGE_LOWER=$(echo "$IMAGE" | tr '[:upper:]' '[:lower:]')
+            FULL="$IMAGE_LOWER:${{ github.sha }}"
+            echo "Deploying image: $FULL"
+
+            # prepare deploy dir
+            DEPLOY_DIR="~/fast-deploy"
+            mkdir -p "$DEPLOY_DIR"
+            cd "$DEPLOY_DIR"
+
+            # try download the repo's compose file (use token if private)
+            COMPOSE_URL="https://raw.githubusercontent.com/${{ github.repository }}/main/docker-compose-backend.yaml"
+            if [ -n "${{ secrets.GHCR_PAT }}" ]; then
+              curl -fsSL -H "Authorization: token ${{ secrets.GHCR_PAT }}" "$COMPOSE_URL" -o docker-compose-backend.yaml || true
+            else
+              curl -fsSL "$COMPOSE_URL" -o docker-compose-backend.yaml || true
+            fi
+
+            # if not present, create a minimal compose file
+            if [ ! -s docker-compose-backend.yaml ]; then
+              cat > docker-compose-backend.yaml <<'YAML'
+version: '3.8'
+services:
+  backend:
+    image: PLACEHOLDER_IMAGE
+    ports:
+      - "8000:8000"
+YAML
+            fi
+
+            # write override to point to the built image
+            cat > docker-compose.override.yml <<EOF
+services:
+  backend:
+    image: ${FULL}
+EOF
+
+            # login to GHCR and pull then run via compose
+            echo "Logging in to ghcr.io"
+            echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u "${{ secrets.GHCR_USER }}" --password-stdin
+
+            docker compose -f docker-compose-backend.yaml -f docker-compose.override.yml pull || true
+            docker compose -f docker-compose-backend.yaml -f docker-compose.override.yml up -d --remove-orphans --force-recreate
