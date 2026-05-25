@@ -13,6 +13,6 @@ services:
       DATABASE_URL: postgresql://admin:1234@db:5438/my_db
       GIT_OWNER: ${GIT_OWNER}
     ports:
-      - "8000:8000"
+      - "8000:8020"
     volumes:
       - .:/app
