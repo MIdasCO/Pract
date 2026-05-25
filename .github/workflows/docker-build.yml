@@ -23,4 +23,5 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build image
         run: |
-          docker build -f Dockerfile -t ${{ github.repository }}:${{ github.sha }} .
+          IMAGE_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          docker build -f Dockerfile -t "${IMAGE_NAME}:${{ github.sha }}" .
