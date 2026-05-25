@@ -5,12 +5,12 @@ services:
     container_name: "${GIT_OWNER}_fast_backend"
     env_file:
       - .env
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn main:app --host 0.0.0.0 --port 8020 --reload
     depends_on:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://admin:1234@db:5432/my_db
+      DATABASE_URL: postgresql://admin:1234@db:5438/my_db
       GIT_OWNER: ${GIT_OWNER}
     ports:
       - "8000:8000"
