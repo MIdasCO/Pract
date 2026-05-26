@@ -1,7 +1,9 @@
 from fastapi import FastAPI, HTTPException, Path, Query, Body, Depends
 from typing import Optional, List, Dict, Annotated
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-from authx import AuthX, AuthXConfig
+from sqlalchemy import inspect, text
+from authx import AuthX, AuthXConfig, token
 
 from models import Base, Task, User
 from database import engine, session_local
@@ -12,9 +14,23 @@ app = FastAPI()
 config = AuthXConfig()
 config.JWT_SECRET_KEY = 'Jojopidr'
 config.JWT_ACCESS_COOKIE_NAME = 'access_token'
-config.JWT_TOKEN_LOCATION = ['cookies']
+config.JWT_TOKEN_LOCATION = ['headers']
 
 Base.metadata.create_all(bind=engine)
+
+
+def ensure_task_user_id_column():
+    inspector = inspect(engine)
+    if 'task' not in inspector.get_table_names():
+        return
+
+    task_columns = {column['name'] for column in inspector.get_columns('task')}
+    if 'user_id' not in task_columns:
+        with engine.begin() as connection:
+            connection.execute(text('ALTER TABLE task ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1'))
+
+
+ensure_task_user_id_column()
 
 
 security = AuthX(config=config)
@@ -26,16 +42,22 @@ def get_db():
     finally:
         db.close()
 
+def get_user_id(credentials=Depends(security.access_token_required)):
+    user_id = getattr(credentials, 'sub', None) or getattr(credentials, 'uid', None)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail='Invalid authentication token')
+    return int(user_id)
+    
 # Task endpoints
 @app.get('/task', response_model=List[TaskSchema])
-async def list_tasks(db: Session = Depends(get_db)) -> List[TaskSchema]:
-    tasks = db.query(Task).all()
+async def list_tasks(db: Session = Depends(get_db), user_id=Depends(get_user_id)) -> List[TaskSchema]:
+    tasks = db.query(Task).filter(Task.user_id == user_id).all()
     return tasks
 
 @app.post('/task/add', response_model=TaskSchema)
-async def create_task(task: TaskCreate, db: Session = Depends(get_db)) -> TaskCreate:
-    db_task = Task(name = task.name, deadline = task.deadline, text = task.text, task_status = task.task_status)
-    
+async def create_task(task: TaskCreate, db: Session = Depends(get_db), user_id=Depends(get_user_id)) -> TaskCreate:
+    db_task = Task(name = task.name, deadline = task.deadline, text = task.text, task_status = task.task_status, user_id = user_id)
+
     db.add(db_task)
     db.commit()
     db.refresh(db_task)
@@ -43,8 +65,8 @@ async def create_task(task: TaskCreate, db: Session = Depends(get_db)) -> TaskCr
     return db_task
 
 @app.put('/task/edit/{task_id}', response_model=TaskSchema)
-async def edit_task(task_id: int, task: TaskCreate, db: Session = Depends(get_db)) -> TaskSchema:
-    db_task = db.query(Task).filter(Task.id == task_id).first()
+async def edit_task(task_id: int, task: TaskCreate, db: Session = Depends(get_db), user_id=Depends(get_user_id)) -> TaskSchema:
+    db_task = db.query(Task).filter(Task.id == task_id, Task.user_id == user_id).first()
     if not db_task:
         raise HTTPException(status_code=404, detail='Task not found')
 
@@ -59,8 +81,8 @@ async def edit_task(task_id: int, task: TaskCreate, db: Session = Depends(get_db
     return db_task
 
 @app.delete('/task/delete/{task_id}', response_model=TaskSchema)
-async def delete_task(task_id: int, db: Session = Depends(get_db)) -> TaskSchema:
-    db_task = db.query(Task).filter(Task.id == task_id).first()
+async def delete_task(task_id: int, db: Session = Depends(get_db), user_id = Depends(get_user_id)) -> TaskSchema:
+    db_task = db.query(Task).filter(Task.id == task_id, Task.user_id == user_id).first()
     if not db_task:
         raise HTTPException(status_code=404, detail='Task not found')
     
@@ -92,7 +114,12 @@ async def login(user: UserLoginSchema, db: Session = Depends(get_db)):
 
     access_token = security.create_access_token(uid=str(db_user.id))
 
-    return {"access_token": access_token, "uid": db_user.id}
+    return {
+        'uid': db_user.id,
+        'email': db_user.email,
+        'access_token': access_token,
+        'token_type': 'bearer'
+    }
 
 @app.get('/users', response_model=List[UserSchema])
 async def list_users(db: Session = Depends(get_db)) -> List[UserSchema]:

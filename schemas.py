@@ -15,6 +15,8 @@ class TaskCreate(TaskBase):
 
 class TaskSchema(TaskBase):
     id: int
+    user_id: int
+
     class Config:
         orm_mode = True
 
